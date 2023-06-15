@@ -1,17 +1,21 @@
-from selenium import webdriver
-import undetected_chromedriver as uc
-from selenium.webdriver.chrome.service import Service as ChromeService
-from webdriver_manager.chrome import ChromeDriverManager
 import pandas as pd
 import json
 import time
 import os.path
 
+from selenium import webdriver
+import undetected_chromedriver as uc
+from selenium.webdriver.chrome.service import Service as ChromeService
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.support.wait import WebDriverWait
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
 
 # Login to etherscan and auto fill login information if available
 def login():
     driver.get("{}/login".format(baseUrl))
-    driver.implicitly_wait(5)
+    # driver.implicitly_wait(2)
+    time.sleep(2)
     driver.find_element("id", "ContentPlaceHolder1_txtUserName").send_keys(
         config["ETHERSCAN_USER"]
     )
@@ -34,11 +38,12 @@ def getLabel(label, label_type="account", input_type="single"):
     table_list = []
 
     driver.get(baseUrlLabel.format(label_type, label, "undefined", index))
-    driver.implicitly_wait(5)
-
     # Find all elements using driver.find_elements where class matches "nav-link"
     # This is used to find all subcategories
-    elems = driver.find_elements("class name", "nav-link")
+    elems = WebDriverWait(driver, 5).until(
+        EC.presence_of_all_elements_located((By.CLASS_NAME, "nav-link"))
+    )
+
     subcat_id_list = []
 
     # Loop through elems and append all values to subcat_id_list
@@ -54,16 +59,17 @@ def getLabel(label, label_type="account", input_type="single"):
     if len(subcat_id_list) == 0:
         subcat_id_list.append("undefined")
 
-    for table_index, subcat_id in enumerate(subcat_id_list):
+    for table_index, subcat_id in enumerate([subcat_id_list[0]]):
         index = 0  # Initialize start index at 0
-        driver.implicitly_wait(5)
         driver.get(baseUrlLabel.format(label_type, label, subcat_id, index))
-        time.sleep(5)  # TODO: allow customization by args
 
         while True:
             print("Index:", index, "Subcat:", subcat_id)
 
             try:
+                WebDriverWait(driver, 1).until(
+                    EC.visibility_of_element_located((By.TAG_NAME, "table"))
+                )
                 # Select relevant table from multiple tables in the page, based on current table index
                 curTable = pd.read_html(driver.page_source)[table_index][:-1]
                 print(curTable)
@@ -75,7 +81,6 @@ def getLabel(label, label_type="account", input_type="single"):
                 for elem in elems:
                     href = elem.get_attribute("href")
                     if href.startswith(baseUrl + "/address/"):
-                        print(href)
                         addressList.append(href[addrIndex:])
 
                 # Quickfix: Optimism uses etherscan subcat style but differing address format
@@ -100,17 +105,18 @@ def getLabel(label, label_type="account", input_type="single"):
                         "class name", "fa-chevron-right"
                     )
                     next_icon_elems[0].click()
-                time.sleep(5)  # TODO: allow customization by args
             else:
                 break
 
     df = pd.concat(table_list)  # Combine all dataframes
+    df.insert(0, "Label", label)
+    # df["Label"] = label
+
     df.fillna("", inplace=True)  # Replace NaN as empty string
     df.index = range(len(df.index))  # Fix index for df
-
     # Prints length and save as a csv
     print(label, "Df length:", len(df.index))
-    df.to_csv(savePath + "{}s/{}.csv".format(label_type, label))
+    df.to_csv(savePath + "{}s/{}.csv".format(label_type, label), index=False)
 
     # Save as json object with mapping address:nameTag
     if label_type == "account":
@@ -127,10 +133,10 @@ def getLabel(label, label_type="account", input_type="single"):
                 for address, nameTag in zip(df["Contract Address"], df["Token Name"])
             ]
         )
-    with open(
-        savePath + "{}s/{}.json".format(label_type, label), "w", encoding="utf-8"
-    ) as f:
-        json.dump(addressNameDict, f, ensure_ascii=True)
+    # with open(
+    #     savePath + "{}s/{}.json".format(label_type, label), "w", encoding="utf-8"
+    # ) as f:
+    #     json.dump(addressNameDict, f, ensure_ascii=True)
 
     if input_type == "single":
         endOrContinue = input(
@@ -152,7 +158,7 @@ def getLabelOldFormat(label, label_type="account", input_type="single"):
         try:
             print("Index:", index)
             driver.get(baseUrlLabel.format(label_type, label, index))
-            driver.implicitly_wait(1)
+            # driver.implicitly_wait(1)
             curTable = pd.read_html(driver.page_source)[0]
         except Exception as e:
             print(e)
@@ -265,12 +271,10 @@ def combineAllJson():
 
 
 # Retrieves all labels from labelcloud and saves as JSON/CSV
-
-
 def getAllLabels():
     driver.get(baseUrl + "/labelcloud")
-    driver.implicitly_wait(5)
-
+    # driver.implicitly_wait(2)
+    time.sleep(2)
     elems = driver.find_elements("xpath", "//a[@href]")
     labels = []
     accountsIndex = len(baseUrl + "/accounts/label/")
@@ -289,9 +293,9 @@ def getAllLabels():
     print("L:", len(labels))
 
     for label in labels:
-        if os.path.exists(
-            savePath + "accounts/{}.json".format(label)
-        ) or os.path.exists(savePath + "accounts/empty/{}.json".format(label)):
+        if os.path.exists(savePath + "accounts/{}.csv".format(label)) or os.path.exists(
+            savePath + "accounts/empty/{}.csv".format(label)
+        ):
             print(label, "'s account labels already exist, skipping.")
             continue
         elif label in ignore_list:
@@ -299,23 +303,23 @@ def getAllLabels():
             continue
 
         getLabel(label, "account", "all")
-        time.sleep(1)  # Give 1s interval to prevent RL
+        time.sleep(0.1)  # Give 1s interval to prevent RL
 
-    for label in labels:
-        if os.path.exists(savePath + "tokens/{}.json".format(label)) or os.path.exists(
-            savePath + "tokens/empty/{}.json".format(label)
-        ):
-            print(label, "'s token labels already exist, skipping.")
-            continue
-        elif label in ignore_list:
-            print(label, "ignored due to large size and irrelevance")
-            continue
+    # for label in labels:
+    #     if os.path.exists(savePath + "tokens/{}.json".format(label)) or os.path.exists(
+    #         savePath + "tokens/empty/{}.json".format(label)
+    #     ):
+    #         print(label, "'s token labels already exist, skipping.")
+    #         continue
+    #     elif label in ignore_list:
+    #         print(label, "ignored due to large size and irrelevance")
+    #         continue
 
-        getLabel(label, "token", "all")
-        time.sleep(1)  # Give 1s interval to prevent RL
+    #     getLabel(label, "token", "all")
+    #     time.sleep(1)  # Give 1s interval to prevent RL
 
-    # Proceed to combine all addresses into single JSON after retrieving all.
-    combineAllJson()
+    # # Proceed to combine all addresses into single JSON after retrieving all.
+    # combineAllJson()
 
 
 # Large size: Eth2/gnsos , Bugged: Liqui , NoData: Remaining labels
@@ -371,7 +375,6 @@ if __name__ == "__main__":
     #         ChromeDriverManager().install()))
 
     driver = uc.Chrome(service=ChromeService(ChromeDriverManager().install()))
-
     login()
 
     retrievalType = input("Enter retrieval type (single/all): ")
